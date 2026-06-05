@@ -11,7 +11,7 @@ from .conv3dsame import Conv3dSame
 CONVS = {1: Conv1dSame, 2: Conv2dSame, 3: Conv3dSame} 
 
 
-def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, dimensions=2, padding_mode='zeros'):
+def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, dimensions=2, padding_mode="zeros"):
     """3x3 convolution with DDPM initialization."""
     conv = CONVS[dimensions](
         in_planes, out_planes, kernel_size=3, stride=stride, dilation=dilation, bias=bias, padding_mode=padding_mode
@@ -46,7 +46,7 @@ class NIN(nn.Module):
 class DDPMResnetBlock(nn.Module):
     """The ResNet Blocks used in DDPM."""
     def __init__(
-            self, act, in_ch, out_ch=None, temb_dim=None, conv_shortcut=False, dropout=0.1, dimensions=2, padding_mode='zeros'
+            self, act, in_ch, out_ch=None, temb_dim=None, conv_shortcut=False, dropout=0.1, dimensions=2, padding_mode="zeros"
     ):
         super().__init__()
         if out_ch is None:

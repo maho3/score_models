@@ -18,7 +18,7 @@ class DownsampleLayer(torch.nn.Module):
             fir=False, 
             fir_kernel=(1, 3, 3, 1),
             dimensions:int = 2,
-            padding_mode: str = "zeros",
+            padding_mode="zeros",
             ):
         super().__init__()
         out_ch = out_ch if out_ch is not None else in_ch

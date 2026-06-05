@@ -8,7 +8,7 @@ from ..definitions import default_init
 
 class UpsampleLayer(Module):
     def __init__(self, in_ch=None, out_ch=None, with_conv=False, fir=False,
-                 fir_kernel=(1, 3, 3, 1), dimensions=2, padding_mode='zeros'):
+                 fir_kernel=(1, 3, 3, 1), dimensions=2, padding_mode="zeros"):
         super().__init__()
         out_ch = out_ch if out_ch else in_ch
         if out_ch != in_ch:

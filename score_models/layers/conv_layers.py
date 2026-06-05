@@ -10,7 +10,7 @@ CONVS = {1: Conv1dSame, 2: Conv2dSame, 3: Conv3dSame}
 __all__ = ("conv1x1", "conv3x3")
 
 
-def conv1x1(in_planes, out_planes, stride=1, bias=True, init_scale=1., dimensions=2, padding_mode='zeros'):
+def conv1x1(in_planes, out_planes, stride=1, bias=True, init_scale=1., dimensions=2, padding_mode="zeros"):
     """1x1 convolution with DDPM initialization."""
     conv = CONVS[dimensions](in_planes, out_planes, kernel_size=1, stride=stride, bias=bias, padding_mode=padding_mode)
     with torch.no_grad():
@@ -19,7 +19,7 @@ def conv1x1(in_planes, out_planes, stride=1, bias=True, init_scale=1., dimension
     return conv
 
 
-def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, init_scale=1., dimensions=2, padding_mode='zeros'):
+def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, init_scale=1., dimensions=2, padding_mode="zeros"):
     """3x3 convolution with DDPM initialization."""
     conv = CONVS[dimensions](
         in_planes, out_planes, kernel_size=3, stride=stride, dilation=dilation, bias=bias, padding_mode=padding_mode

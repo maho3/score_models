@@ -23,7 +23,7 @@ class ResnetBlockBigGANpp(nn.Module):
             skip_rescale=True,
             init_scale=0.,
             dimensions=2,
-            padding_mode='zeros'
+            padding_mode="zeros"
     ):
         super().__init__()
         assert dimensions in [1, 2, 3]
