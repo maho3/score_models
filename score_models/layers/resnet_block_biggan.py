@@ -22,10 +22,13 @@ class ResnetBlockBigGANpp(nn.Module):
             fir_kernel=(1, 3, 3, 1),
             skip_rescale=True,
             init_scale=0.,
-            dimensions=2
+            dimensions=2,
+            padding_mode="zeros"
     ):
         super().__init__()
         assert dimensions in [1, 2, 3]
+        if padding_mode == "circular" and fir:
+            raise ValueError("`padding_mode=\"circular\"` is not supported with `fir=True`; set `fir=False`.")
         self.dimensions = dimensions
         out_ch = out_ch if out_ch is not None else in_ch
         self.up = up
@@ -38,7 +41,7 @@ class ResnetBlockBigGANpp(nn.Module):
         self.out_ch = out_ch
 
         self.GroupNorm_0 = nn.GroupNorm(num_groups=min(in_ch // 4, 32), num_channels=in_ch, eps=1e-6)
-        self.Conv_0 = conv3x3(in_ch, out_ch, dimensions=dimensions)
+        self.Conv_0 = conv3x3(in_ch, out_ch, dimensions=dimensions, padding_mode=padding_mode)
         if temb_dim is not None:
             self.Dense_0 = nn.Linear(temb_dim, out_ch)
             with torch.no_grad():
@@ -48,9 +51,9 @@ class ResnetBlockBigGANpp(nn.Module):
         self.GroupNorm_1 = nn.GroupNorm(num_groups=min(out_ch // 4, 32), num_channels=out_ch, eps=1e-6)
         self.Dropout_0 = nn.Dropout(dropout)
         # suppress skip connection at initialization
-        self.Conv_1 = conv3x3(out_ch, out_ch, init_scale=init_scale, dimensions=dimensions)
+        self.Conv_1 = conv3x3(out_ch, out_ch, init_scale=init_scale, dimensions=dimensions, padding_mode=padding_mode)
         if in_ch != out_ch or up or down:
-            self.Conv_2 = conv1x1(in_ch, out_ch, dimensions=dimensions)
+            self.Conv_2 = conv1x1(in_ch, out_ch, dimensions=dimensions, padding_mode=padding_mode)
 
 
     def forward(self, x, temb=None):
@@ -87,4 +90,3 @@ class ResnetBlockBigGANpp(nn.Module):
             return x + h
         else:
             return (x + h) / SQRT2
-
