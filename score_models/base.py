@@ -1,9 +1,12 @@
 from typing import Callable, Union
 
 import torch
+import torch.distributed as dist
 from torch import Tensor
 from torch.nn import Module
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 from torch.func import vjp
 from torch_ema import ExponentialMovingAverage
 from .utils import DEVICE
@@ -276,7 +279,8 @@ class ScoreModelBase(Module, ABC):
         logdir=None,
         n_iterations_in_epoch=None,
         logname_prefix="score_model",
-        verbose=0
+        verbose=0,
+        distributed=None
     ):
         """
         Train the model on the provided dataset.
@@ -302,13 +306,52 @@ class ScoreModelBase(Module, ABC):
             logname (str, optional): The logname for saving checkpoints. Default is None.
             logdir (str, optional): The path to the directory in which to create the new checkpoint_directory with logname.
             logname_prefix (str, optional): The prefix for the logname. Default is "score_model".
+            distributed (bool, optional): Enable DDP training. If None, DDP is automatically enabled when a distributed
+                process group is already initialized.
 
         Returns:
             list: List of loss values during training.
         """
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        ema = ExponentialMovingAverage(self.model.parameters(), decay=ema_decay)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=False)
+        if distributed is None:
+            distributed = dist.is_available() and dist.is_initialized()
+        elif distributed and not (dist.is_available() and dist.is_initialized()):
+            raise ValueError("distributed=True requires an initialized torch.distributed process group.")
+
+        rank = dist.get_rank() if distributed else 0
+        world_size = dist.get_world_size() if distributed else 1
+        is_rank0 = rank == 0
+        if distributed and torch.cuda.is_available():
+            local_rank = int(os.environ.get("LOCAL_RANK", rank))
+            if local_rank >= torch.cuda.device_count():
+                raise ValueError(f"LOCAL_RANK={local_rank} is invalid for {torch.cuda.device_count()} CUDA device(s).")
+            device = torch.device("cuda", local_rank)
+            torch.cuda.set_device(device)
+            self.device = device
+            self.model.to(device)
+
+        ddp_device_ids = None
+        ddp_output_device = None
+        if distributed and torch.cuda.is_available():
+            ddp_device_ids = [self.device.index]
+            ddp_output_device = self.device.index
+
+        wrapped_with_ddp = False
+        if distributed and not isinstance(self.model, DistributedDataParallel):
+            self.model = DistributedDataParallel(self.model, device_ids=ddp_device_ids, output_device=ddp_output_device)
+            wrapped_with_ddp = True
+
+        model_for_optimization = self.model.module if isinstance(self.model, DistributedDataParallel) else self.model
+        optimizer = torch.optim.Adam(model_for_optimization.parameters(), lr=learning_rate)
+        ema = ExponentialMovingAverage(model_for_optimization.parameters(), decay=ema_decay)
+
+        sampler = DistributedSampler(dataset, shuffle=shuffle) if distributed else None
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle if sampler is None else False,
+            sampler=sampler,
+            drop_last=False
+        )
         if n_iterations_in_epoch is None:
             n_iterations_in_epoch = len(dataloader)
         if checkpoints_directory is None:
@@ -333,11 +376,13 @@ class ScoreModelBase(Module, ABC):
             save_checkpoint = True
             if checkpoints_directory is None:
                 checkpoints_directory = os.path.join(logdir, logname)
-            if not os.path.isdir(checkpoints_directory):
+            if is_rank0 and not os.path.isdir(checkpoints_directory):
                 os.mkdir(checkpoints_directory)
+            if distributed:
+                dist.barrier()
 
             script_params_path = os.path.join(checkpoints_directory, "script_params.json")
-            if not os.path.isfile(script_params_path):
+            if is_rank0 and not os.path.isfile(script_params_path):
                 with open(script_params_path, "w") as f:
                     json.dump(
                         {
@@ -358,15 +403,20 @@ class ScoreModelBase(Module, ABC):
                             "seed": seed,
                             "logname": logname,
                             "logname_prefix": logname_prefix,
+                            "distributed": distributed,
                         },
                         f,
                         indent=4
                     )
+            if distributed:
+                dist.barrier()
             
             model_hparams_path = os.path.join(checkpoints_directory, "model_hparams.json")
-            if not os.path.isfile(model_hparams_path):
+            if is_rank0 and not os.path.isfile(model_hparams_path):
                 with open(model_hparams_path, "w") as f:
                     json.dump(self.hyperparameters, f, indent=4)
+            if distributed:
+                dist.barrier()
 
             # ======= Load model if model_id is provided ===============================================================
             paths = glob.glob(os.path.join(checkpoints_directory, "checkpoint*.pt"))
@@ -376,17 +426,19 @@ class ScoreModelBase(Module, ABC):
             if checkpoint_indices:
                 if model_checkpoint is not None:
                     checkpoint_path = paths[checkpoint_indices.index(model_checkpoint)]
-                    self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.model.device))
-                    optimizer.load_state_dict(torch.load(opt_paths[checkpoints == model_checkpoint], map_location=self.device))
-                    print(f"Loaded checkpoint {model_checkpoint} of {logname}")
+                    model_for_optimization.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+                    optimizer.load_state_dict(torch.load(opt_paths[checkpoint_indices.index(model_checkpoint)], map_location=self.device))
+                    if is_rank0:
+                        print(f"Loaded checkpoint {model_checkpoint} of {logname}")
                     latest_checkpoint = model_checkpoint
                 else:
                     max_checkpoint_index = np.argmax(checkpoint_indices)
                     checkpoint_path = paths[max_checkpoint_index]
                     opt_path = opt_paths[max_checkpoint_index]
-                    self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+                    model_for_optimization.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
                     optimizer.load_state_dict(torch.load(opt_path, map_location=self.device))
-                    print(f"Loaded checkpoint {checkpoint_indices[max_checkpoint_index]} of {logname}")
+                    if is_rank0:
+                        print(f"Loaded checkpoint {checkpoint_indices[max_checkpoint_index]} of {logname}")
                     latest_checkpoint = checkpoint_indices[max_checkpoint_index]
 
         if seed is not None:
@@ -399,7 +451,10 @@ class ScoreModelBase(Module, ABC):
         out_of_time = False
 
         data_iter = iter(dataloader)
-        for epoch in (pbar := tqdm(range(epochs))):
+        for epoch in (pbar := tqdm(range(epochs), disable=not is_rank0)):
+            if sampler is not None:
+                sampler.set_epoch(epoch)
+                data_iter = iter(dataloader)
             if (time.time() - global_start) > max_time * 3600 - estimated_time_for_epoch:
                 break
             epoch_start = time.time()
@@ -428,28 +483,33 @@ class ScoreModelBase(Module, ABC):
                         g['lr'] = learning_rate * np.minimum(step / warmup, 1.0)
 
                 if clip > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=clip)
+                    torch.nn.utils.clip_grad_norm_(model_for_optimization.parameters(), max_norm=clip)
 
                 optimizer.step()
                 ema.update()
 
                 _time = time.time() - start
                 time_per_step_epoch_mean += _time
-                cost += float(loss)
+                cost += float(loss.detach())
                 step += 1
 
             time_per_step_epoch_mean /= len(dataloader)
             cost /= len(dataloader)
+            if distributed:
+                cost_tensor = torch.tensor([cost], device=self.device, dtype=torch.float32)
+                dist.all_reduce(cost_tensor, op=dist.ReduceOp.SUM)
+                cost = float(cost_tensor.item() / world_size)
             pbar.set_description(f"Epoch {epoch + 1:d} | Cost: {cost:.1e} |")
             losses.append(cost)
-            if verbose >= 2:
+            if is_rank0 and verbose >= 2:
                 print(f"epoch {epoch} | cost {cost:.2e} | time per step {time_per_step_epoch_mean:.2e} s")
-            elif verbose == 1:
+            elif is_rank0 and verbose == 1:
                 if (epoch + 1) % checkpoints == 0:
                     print(f"epoch {epoch} | cost {cost:.1e}")
 
             if np.isnan(cost):
-                print("Model exploded and returns NaN")
+                if is_rank0:
+                    print("Model exploded and returns NaN")
                 break
 
             if cost < (1 - tolerance) * best_loss:
@@ -461,13 +521,13 @@ class ScoreModelBase(Module, ABC):
             if (time.time() - global_start) > max_time * 3600:
                 out_of_time = True
 
-            if save_checkpoint:
+            if save_checkpoint and is_rank0:
                 if (epoch + 1) % checkpoints == 0 or patience == 0 or epoch == epochs - 1 or out_of_time:
                     latest_checkpoint += 1
                     with open(os.path.join(checkpoints_directory, "score_sheet.txt"), mode="a") as f:
                         f.write(f"{latest_checkpoint} {cost}\n")
                     with ema.average_parameters():
-                        torch.save(self.model.state_dict(), os.path.join(checkpoints_directory, f"checkpoint_{cost:.4e}_{latest_checkpoint:03d}.pt"))
+                        torch.save(model_for_optimization.state_dict(), os.path.join(checkpoints_directory, f"checkpoint_{cost:.4e}_{latest_checkpoint:03d}.pt"))
                     torch.save(optimizer.state_dict(), os.path.join(checkpoints_directory, f"optimizer_{cost:.4e}_{latest_checkpoint:03d}.pt"))
                     paths = glob.glob(os.path.join(checkpoints_directory, "*.pt"))
                     checkpoint_indices = [int(re.findall('[0-9]+', os.path.split(path)[-1])[-1]) for path in paths]
@@ -480,17 +540,24 @@ class ScoreModelBase(Module, ABC):
                         del checkpoint_indices[index_to_delete]
 
             if patience == 0:
-                print("Reached patience")
+                if is_rank0:
+                    print("Reached patience")
                 break
 
             if out_of_time:
-                print("Out of time")
+                if is_rank0:
+                    print("Out of time")
                 break
 
             if epoch > 0:
                 estimated_time_for_epoch = time.time() - epoch_start
 
-        print(f"Finished training after {(time.time() - global_start) / 3600:.3f} hours.")
+        if is_rank0:
+            print(f"Finished training after {(time.time() - global_start) / 3600:.3f} hours.")
+        if distributed:
+            dist.barrier()
         # Save EMA weights in the model
-        ema.copy_to(self.parameters())
+        ema.copy_to(model_for_optimization.parameters())
+        if wrapped_with_ddp:
+            self.model = model_for_optimization
         return losses

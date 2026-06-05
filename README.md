@@ -63,6 +63,13 @@ net = DDPM(channels=1, nf=128, ch_mult=[2, 2, 2, 2])
 # Train the score model, and save its weight in checkpoints_directory
 model.fit(dataset, epochs=100, batch_size=B, learning_rate=1e-4, checkpoints_directory=checkpoints_directory)
 
+# If `torch.distributed` is already initialized (e.g. with torchrun),
+# `fit(...)` automatically switches to DistributedDataParallel training.
+# You can also enforce it explicitly with distributed=True.
+# torchrun --standalone --nproc_per_node=4 train.py
+# ...
+# model.fit(dataset, epochs=100, batch_size=B, learning_rate=1e-4, distributed=True)
+
 # Generate samples from the trained model (steps is the number of Euler-Maruyama steps)
 samples = model.sample(shape=[B, *dimensions], steps=1000)
 

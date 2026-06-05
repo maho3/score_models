@@ -1,8 +1,10 @@
 import torch
+import torch.distributed as dist
 from torch.utils.data import TensorDataset
 from score_models import ScoreModel, EnergyModel, MLP, NCSNpp
 import shutil, os
 import numpy as np
+import pytest
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, size, channels, dimensions:list, conditioning="None", test_input_list=False):
@@ -298,4 +300,42 @@ def test_training_energy():
         )
     print(losses)
 
+
+def test_training_distributed_requires_process_group():
+    dataset = Dataset(size=4, channels=2, dimensions=[])
+    net = MLP(dimensions=2, units=4, layers=2)
+    model = ScoreModel(model=net, sigma_min=1e-2, sigma_max=10, device="cpu")
+    with pytest.raises(ValueError, match="process group"):
+        model.fit(dataset, batch_size=2, epochs=1, distributed=True)
+
+
+def test_training_distributed_autodetect_single_process():
+    if dist.is_initialized():
+        pytest.skip("torch.distributed process group is already initialized")
+
+    checkpoints_directory = os.path.dirname(os.path.abspath(__file__)) + "/checkpoints_ddp"
+    init_file = os.path.abspath(checkpoints_directory + "_init")
+    os.makedirs(checkpoints_directory, exist_ok=True)
+    try:
+        dist.init_process_group(backend="gloo", init_method=f"file://{init_file}", rank=0, world_size=1)
+        dataset = Dataset(size=4, channels=2, dimensions=[])
+        net = MLP(dimensions=2, units=4, layers=2)
+        model = ScoreModel(model=net, sigma_min=1e-2, sigma_max=10, device="cpu")
+        losses = model.fit(
+            dataset,
+            batch_size=2,
+            epochs=1,
+            checkpoints_directory=checkpoints_directory,
+            checkpoints=1
+        )
+        assert len(losses) == 1
+        assert not isinstance(model.model, torch.nn.parallel.DistributedDataParallel)
+        assert any(path.startswith("checkpoint_") for path in os.listdir(checkpoints_directory))
+    finally:
+        if dist.is_initialized():
+            dist.destroy_process_group()
+        if os.path.isfile(init_file):
+            os.remove(init_file)
+        if os.path.isdir(checkpoints_directory):
+            shutil.rmtree(checkpoints_directory)
 
