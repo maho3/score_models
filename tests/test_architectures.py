@@ -1,5 +1,6 @@
 from score_models.architectures import NCSNpp, DDPM, MLP
 import torch
+import pytest
 
 
 def test_ddpm():
@@ -32,6 +33,32 @@ def test_ncsnpp3d():
     t = torch.randn([1])
     model = NCSNpp(1, dimensions=3, nf=8, ch_mult=(1, 1, 2, 2), attention=True)
     model(x=x, t=t)
+
+def test_ncsnpp3d_circular_padding():
+    x = torch.randn(size=[1, 1, 16, 16, 16]) * 500
+    t = torch.randn([1])
+    model = NCSNpp(
+        1,
+        dimensions=3,
+        nf=8,
+        ch_mult=(1, 1, 2),
+        attention=False,
+        fir=False,
+        padding_mode="circular"
+    )
+    model(x=x, t=t)
+
+
+def test_ncsnpp3d_circular_padding_unsupported_with_fir():
+    with pytest.raises(ValueError, match="fir=True"):
+        NCSNpp(
+            1,
+            dimensions=3,
+            nf=8,
+            ch_mult=(1, 1, 2),
+            attention=False,
+            padding_mode="circular"
+        )
 
 
 def test_mlp():

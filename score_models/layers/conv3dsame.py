@@ -45,6 +45,7 @@ class Conv3dSame(nn.Module):
         self.stride = stride
         self.dilation = dilation
         self.kernel_size = kernel_size
+        self.padding_mode = padding_mode
 
     def forward(self, x):
         if self.stride > 1:
@@ -54,7 +55,11 @@ class Conv3dSame(nn.Module):
             p0 = ((h_o - 1) * self.stride + 1 + self.dilation * (self.kernel_size - 1) - h) // 2
             p1 = ((w_o - 1) * self.stride + 1 + self.dilation * (self.kernel_size - 1) - w) // 2
             p2 = ((d_o - 1) * self.stride + 1 + self.dilation * (self.kernel_size - 1) - d) // 2
-            x = F.pad(x, (p0, p0+1, p1, p1+1, p2, p2+1))
+            x = F.pad(
+                x,
+                (p0, p0 + 1, p1, p1 + 1, p2, p2 + 1),
+                mode='constant' if self.padding_mode == 'zeros' else self.padding_mode
+            )
         x = self.conv(x)
         return x
 

@@ -31,6 +31,7 @@ class NCSNpp(nn.Module):
         resblock_type (str): The type of residual block to use. Default is "biggan".
         combine_method (str): The method to use for combining the results. Default is "sum".
         attention (bool): Whether or not to use attention. Default is True.
+        padding_mode (str): Spatial padding mode for convolutions. Supports "zeros" (default) and "circular" (3D only).
 
     """
     def __init__(
@@ -53,6 +54,7 @@ class NCSNpp(nn.Module):
             resblock_type="biggan",
             combine_method="sum",
             attention=True,
+            padding_mode="zeros",
             condition:tuple[str,...]=["None"], # discrete_time, continuous_time, vector, input
             condition_num_embedding:tuple[int,...]=None,
             condition_input_channels:int=None,
@@ -65,6 +67,10 @@ class NCSNpp(nn.Module):
         super().__init__()
         if dimensions not in [1, 2, 3]:
             raise ValueError("Input must have 1, 2, or 3 spatial dimensions to use this architecture")
+        if padding_mode not in ["zeros", "circular"]:
+            raise ValueError(f"Unknown padding mode {padding_mode}. Choose from ['zeros', 'circular'].")
+        if dimensions != 3 and padding_mode == "circular":
+            raise ValueError("`padding_mode=\"circular\"` is currently only supported for `dimensions=3`.")
         self.conditioned = False
         discrete_index = 0
         if condition is not None:
@@ -116,6 +122,7 @@ class NCSNpp(nn.Module):
             "combine_method": combine_method,
             "attention": attention,
             "dimensions": dimensions,
+            "padding_mode": padding_mode,
             "condition": condition,
             "condition_num_embedding": condition_num_embedding,
             "condition_input_channels": condition_input_channels,
@@ -164,14 +171,35 @@ class NCSNpp(nn.Module):
             modules[2].bias.zero_()
 
         AttnBlock = functools.partial(SelfAttentionBlock, init_scale=init_scale, dimensions=dimensions)
-        Upsample = functools.partial(UpsampleLayer, with_conv=resample_with_conv, fir=fir, fir_kernel=fir_kernel, dimensions=self.dimensions)
+        Upsample = functools.partial(
+            UpsampleLayer,
+            with_conv=resample_with_conv,
+            fir=fir,
+            fir_kernel=fir_kernel,
+            dimensions=self.dimensions,
+            padding_mode=padding_mode
+        )
 
         if progressive == 'output_skip':
             self.pyramid_upsample = Upsample(fir=fir, fir_kernel=fir_kernel, with_conv=False)
         elif progressive == 'residual':
-            pyramid_upsample = functools.partial(UpsampleLayer, fir=fir, fir_kernel=fir_kernel, with_conv=True, dimensions=self.dimensions)
+            pyramid_upsample = functools.partial(
+                UpsampleLayer,
+                fir=fir,
+                fir_kernel=fir_kernel,
+                with_conv=True,
+                dimensions=self.dimensions,
+                padding_mode=padding_mode
+            )
 
-        Downsample = functools.partial(DownsampleLayer, with_conv=resample_with_conv, fir=fir, fir_kernel=fir_kernel, dimensions=self.dimensions)
+        Downsample = functools.partial(
+            DownsampleLayer,
+            with_conv=resample_with_conv,
+            fir=fir,
+            fir_kernel=fir_kernel,
+            dimensions=self.dimensions,
+            padding_mode=padding_mode
+        )
 
         if progressive_input == 'input_skip':
             self.pyramid_downsample = Downsample(fir=fir, fir_kernel=fir_kernel, with_conv=False)
@@ -186,7 +214,8 @@ class NCSNpp(nn.Module):
                                             init_scale=init_scale,
                                             skip_rescale=skip_rescale,
                                             temb_dim=nf * 4,
-                                            dimensions=self.dimensions
+                                            dimensions=self.dimensions,
+                                            padding_mode=padding_mode
                                             )
 
         elif resblock_type == 'biggan':
@@ -198,7 +227,8 @@ class NCSNpp(nn.Module):
                                             init_scale=init_scale,
                                             skip_rescale=skip_rescale,
                                             temb_dim=nf * 4,
-                                            dimensions=self.dimensions
+                                            dimensions=self.dimensions,
+                                            padding_mode=padding_mode
                                             )
 
         else:
@@ -206,7 +236,9 @@ class NCSNpp(nn.Module):
 
         # Downsampling block
         input_pyramid_ch = channels + self.condition_input_channels
-        modules.append(conv3x3(channels + self.condition_input_channels, nf, dimensions=dimensions))
+        modules.append(
+            conv3x3(channels + self.condition_input_channels, nf, dimensions=dimensions, padding_mode=padding_mode)
+        )
         hs_c = [nf]
         in_ch = nf #+ fourier_feature_channels
         for i_level in range(num_resolutions):
@@ -252,12 +284,14 @@ class NCSNpp(nn.Module):
                     if progressive == 'output_skip':
                         modules.append(nn.GroupNorm(num_groups=min(in_ch // 4, 32),
                                                     num_channels=in_ch, eps=1e-6))
-                        modules.append(conv3x3(in_ch, channels, init_scale=init_scale, dimensions=dimensions))
+                        modules.append(
+                            conv3x3(in_ch, channels, init_scale=init_scale, dimensions=dimensions, padding_mode=padding_mode)
+                        )
                         pyramid_ch = channels
                     elif progressive == 'residual':
                         modules.append(nn.GroupNorm(num_groups=min(in_ch // 4, 32),
                                                     num_channels=in_ch, eps=1e-6))
-                        modules.append(conv3x3(in_ch, in_ch, bias=True, dimensions=dimensions))
+                        modules.append(conv3x3(in_ch, in_ch, bias=True, dimensions=dimensions, padding_mode=padding_mode))
                         pyramid_ch = in_ch
                     else:
                         raise ValueError(f'{progressive} is not a valid name.')
@@ -265,7 +299,12 @@ class NCSNpp(nn.Module):
                     if progressive == 'output_skip':
                         modules.append(nn.GroupNorm(num_groups=min(in_ch // 4, 32),
                                                     num_channels=in_ch, eps=1e-6))
-                        modules.append(conv3x3(in_ch, channels, bias=True, init_scale=init_scale, dimensions=dimensions))
+                        modules.append(
+                            conv3x3(
+                                in_ch, channels, bias=True, init_scale=init_scale, dimensions=dimensions,
+                                padding_mode=padding_mode
+                            )
+                        )
                         pyramid_ch = channels
                     elif progressive == 'residual':
                         modules.append(pyramid_upsample(in_ch=pyramid_ch, out_ch=in_ch))
@@ -284,7 +323,7 @@ class NCSNpp(nn.Module):
         if progressive != 'output_skip':
             modules.append(nn.GroupNorm(num_groups=min(in_ch // 4, 32),
                                         num_channels=in_ch, eps=1e-6))
-            modules.append(conv3x3(in_ch, channels, init_scale=1., dimensions=dimensions))
+            modules.append(conv3x3(in_ch, channels, init_scale=1., dimensions=dimensions, padding_mode=padding_mode))
 
         self.all_modules = nn.ModuleList(modules)
 
@@ -428,4 +467,3 @@ class NCSNpp(nn.Module):
         assert m_idx == len(modules)
 
         return h
-

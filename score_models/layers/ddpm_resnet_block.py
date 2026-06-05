@@ -11,9 +11,11 @@ from .conv3dsame import Conv3dSame
 CONVS = {1: Conv1dSame, 2: Conv2dSame, 3: Conv3dSame} 
 
 
-def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, dimensions=2):
+def conv3x3(in_planes, out_planes, stride=1, bias=True, dilation=1, dimensions=2, padding_mode='zeros'):
     """3x3 convolution with DDPM initialization."""
-    conv = CONVS[dimensions](in_planes, out_planes, kernel_size=3, stride=stride, dilation=dilation, bias=bias)
+    conv = CONVS[dimensions](
+        in_planes, out_planes, kernel_size=3, stride=stride, dilation=dilation, bias=bias, padding_mode=padding_mode
+    )
     return conv
 
 
@@ -43,13 +45,15 @@ class NIN(nn.Module):
 
 class DDPMResnetBlock(nn.Module):
     """The ResNet Blocks used in DDPM."""
-    def __init__(self, act, in_ch, out_ch=None, temb_dim=None, conv_shortcut=False, dropout=0.1, dimensions=2):
+    def __init__(
+            self, act, in_ch, out_ch=None, temb_dim=None, conv_shortcut=False, dropout=0.1, dimensions=2, padding_mode='zeros'
+    ):
         super().__init__()
         if out_ch is None:
             out_ch = in_ch
         self.GroupNorm_0 = nn.GroupNorm(num_groups=min(in_ch // 4, 32), num_channels=in_ch, eps=1e-6)
         self.act = act
-        self.Conv_0 = conv3x3(in_ch, out_ch, dimensions=dimensions)
+        self.Conv_0 = conv3x3(in_ch, out_ch, dimensions=dimensions, padding_mode=padding_mode)
         if temb_dim is not None:
             self.Dense_0 = nn.Linear(temb_dim, out_ch)
             self.Dense_0.weight.data = default_init()(self.Dense_0.weight.data.shape)
@@ -57,10 +61,10 @@ class DDPMResnetBlock(nn.Module):
 
         self.GroupNorm_1 = nn.GroupNorm(num_groups=min(out_ch // 4, 32), num_channels=out_ch, eps=1e-6)
         self.Dropout_0 = nn.Dropout(dropout)
-        self.Conv_1 = conv3x3(out_ch, out_ch, dimensions=dimensions)
+        self.Conv_1 = conv3x3(out_ch, out_ch, dimensions=dimensions, padding_mode=padding_mode)
         if in_ch != out_ch:
             if conv_shortcut:
-                self.Conv_2 = conv3x3(in_ch, out_ch, dimensions=dimensions)
+                self.Conv_2 = conv3x3(in_ch, out_ch, dimensions=dimensions, padding_mode=padding_mode)
             else:
                 self.NIN_0 = NIN(in_ch, out_ch)
         self.out_ch = out_ch

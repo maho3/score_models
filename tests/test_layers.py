@@ -1,5 +1,7 @@
 import torch
+import torch.nn.functional as F
 from score_models.layers import StyleGANConv, UpsampleLayer, DownsampleLayer, Combine, ResnetBlockBigGANpp
+from score_models.layers import Conv3dSame
 from score_models.layers.attention_block import SelfAttentionBlock, ScaledAttentionLayer
 from score_models.definitions import default_init
 from score_models.utils import get_activation
@@ -197,4 +199,20 @@ def test_transposed_conv():
         y = layer(x_down)
         print("Up", x.shape)
         assert x.shape == torch.Size([B, C, *[D]*dim])
+
+
+def test_conv3dsame_stride_circular_padding_matches_reference():
+    layer = Conv3dSame(1, 1, kernel_size=3, stride=2, bias=False, padding_mode="circular")
+    with torch.no_grad():
+        layer.conv.weight.fill_(1.0)
+
+    x = torch.arange(9 * 9 * 9, dtype=torch.float32).reshape(1, 1, 9, 9, 9)
+    y = layer(x)
+
+    output_size = x.shape[-1] // layer.stride
+    pad = ((output_size - 1) * layer.stride + 1 + layer.dilation * (layer.kernel_size - 1) - x.shape[-1]) // 2
+    padded = F.pad(x, (pad, pad + 1, pad, pad + 1, pad, pad + 1), mode="circular")
+    y_ref = F.conv3d(padded, layer.conv.weight, bias=None, stride=2, padding=0)
+
+    assert torch.allclose(y, y_ref)
         

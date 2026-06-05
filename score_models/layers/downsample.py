@@ -18,6 +18,7 @@ class DownsampleLayer(torch.nn.Module):
             fir=False, 
             fir_kernel=(1, 3, 3, 1),
             dimensions:int = 2,
+            padding_mode: str = "zeros",
             ):
         super().__init__()
         out_ch = out_ch if out_ch is not None else in_ch
@@ -26,9 +27,10 @@ class DownsampleLayer(torch.nn.Module):
         self.dimensions = dimensions
         self.with_conv = with_conv
         self.out_ch = out_ch
+        self.padding_mode = padding_mode
         if not fir:
             if with_conv:
-                self.Conv_0 = conv3x3(in_ch, out_ch, stride=2, dimensions=dimensions)
+                self.Conv_0 = conv3x3(in_ch, out_ch, stride=2, dimensions=dimensions, padding_mode=padding_mode)
         else:
             if with_conv:
                 self.Conv_0 = StyleGANConv(in_ch, out_ch,
@@ -45,7 +47,7 @@ class DownsampleLayer(torch.nn.Module):
         if not self.fir:
             if self.with_conv:
                 pad = [0, 1]*self.dimensions
-                x = F.pad(x, pad)
+                x = F.pad(x, pad, mode='constant' if self.padding_mode == 'zeros' else self.padding_mode)
                 x = self.Conv_0(x)
             else:
                 x = AVGPOOL_FUNC[self.dimensions](x, 2, stride=2)
@@ -55,4 +57,3 @@ class DownsampleLayer(torch.nn.Module):
             else:
                 x = self.Conv_0(x)
         return x
-

@@ -53,6 +53,8 @@ model = ScoreModel(model=net, beta_min=1e-2, beta_max=20, device="cuda")
 net = NCSNpp(channels=C, nf=128, ch_mult=[2, 2, 2, 2], dimensions=1)
 # ... or 3D convolutions for videos/voxels
 net = NCSNpp(channels=1, nf=128, ch_mult=[2, 2, 2, 2], attention=False, dimensions=3)
+# ... or periodic 3D padding for voxel/cosmology domains
+net = NCSNpp(channels=1, nf=128, ch_mult=[2, 2, 2, 2], attention=False, dimensions=3, fir=False, padding_mode="circular")
 # You can also use a simpler MLP architecture (dimensions=0)
 net = MLP(dimensions=C, layers=4, units=100)
 # ... or Jonathan Ho's DDPM architecture
@@ -174,4 +176,3 @@ archivePrefix = {arXiv},
 
 
 This package is licensed under the MIT License.
-
