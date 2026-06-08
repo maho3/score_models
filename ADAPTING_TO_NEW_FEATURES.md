@@ -43,6 +43,23 @@ Then call `fit(...)` either:
 model.fit(dataset, epochs=100, batch_size=8, learning_rate=1e-4, distributed=True)
 ```
 
+### SLURM (DeltaAI-style) recommendations
+- Request one task per GPU (`--ntasks-per-node == --gpus-per-node`) and bind CPUs accordingly.
+- Use `srun` to launch `torchrun` so ranks inherit SLURM networking/env settings.
+- Set rendezvous parameters explicitly (`MASTER_ADDR`, `MASTER_PORT`, `--rdzv_backend=c10d`) for multi-node jobs.
+- Write checkpoints/logs to fast shared storage (`$SCRATCH`/project storage), not local `/tmp`.
+
+Minimal job-launch pattern:
+```bash
+srun torchrun \
+  --nnodes=${SLURM_NNODES} \
+  --nproc_per_node=${SLURM_GPUS_ON_NODE} \
+  --node_rank=${SLURM_NODEID} \
+  --rdzv_backend=c10d \
+  --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+  train.py
+```
+
 ## 4) Common pitfalls
 - `padding_mode="circular"` is only supported for `dimensions=3`.
 - `padding_mode="circular"` is not supported with `fir=True`.
